@@ -5,17 +5,17 @@ import sys
 import json
 import os
 import gi
-gi.require_version('Gtk', '4.0')
-gi.require_version('Gdk', '4.0')
+gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
 gi.require_version('Wnck', '3.0')
-from gi.repository import Gtk, Gdk, Wnck, GLib
+from gi.repository import Gtk, Gdk, Wnck, GLib, GdkX11
 
 APP_NAME = "Groupy"
 CONFIG_FILE = os.path.expanduser("~/.config/groupy/config.json")
 
 class GroupyWindow(Gtk.Window):
     def __init__(self):
-        super().__init__(title=APP_NAME)
+        Gtk.Window.__init__(self, title=APP_NAME)
         self.set_default_size(1200, 800)
         self.containers = {}  # window_xid -> container
         self.groups = {}  # group_name -> [windows]
@@ -24,29 +24,29 @@ class GroupyWindow(Gtk.Window):
         self.config = self.load_config()
 
         # 主布局
-        self.vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.set_child(self.vbox)
+        self.vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.add(self.vbox)
 
         # 标签栏
         self.notebook = Gtk.Notebook()
         self.notebook.set_show_tabs(True)
         self.notebook.set_show_border(True)
         self.notebook.connect("switch-page", self.on_page_switched)
-        self.vbox.append(self.notebook)
+        self.vbox.pack_start(self.notebook, True, True, 0)
 
         # 工具栏
-        self.toolbar = Gtk.ActionBar()
-        self.vbox.append(self.toolbar)
+        self.toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        self.vbox.pack_start(self.toolbar, False, False, 0)
 
         # 新建分组按钮
         new_group_btn = Gtk.Button(label="➕ 新建分组")
         new_group_btn.connect("clicked", self.on_new_group_clicked)
-        self.toolbar.pack_start(new_group_btn)
+        self.toolbar.pack_start(new_group_btn, False, False, 0)
 
         # 设置按钮
         self.settings_btn = Gtk.Button(label="⚙️ 设置")
         self.settings_btn.connect("clicked", self.on_settings_clicked)
-        self.toolbar.pack_end(self.settings_btn)
+        self.toolbar.pack_end(self.settings_btn, False, False, 0)
 
         # 初始化 Wnck
         Wnck.Screen.get_default()
@@ -63,73 +63,61 @@ class GroupyWindow(Gtk.Window):
         self.setup_shortcuts()
 
     def setup_shortcuts(self):
-        """设置快捷键"""
-        # Ctrl+N 新建分组
-        ctrl_n = Gtk.ShortcutController.new()
-        ctrl_n.set_scope(Gtk.ShortcutScope.GLOBAL)
-        ctrl_n.add_shortcut(
-            Gtk.Shortcut.new(
-                Gtk.Keyval.from_name("n"),
-                Gtk.ModifierType.CONTROL_MASK,
-                Gtk.CallbackAction.new(self.on_new_group_shortcut),
-                None
-            )
-        )
-        self.add_controller(ctrl_n)
+        """设置快捷键 - GTK 3 使用 AccelGroup"""
+        # Super+G 新建分组
+        accel_group = Gtk.AccelGroup()
+        self.add_accel_group(accel_group)
+        accel_group.connect(Gdk.KEY_g, Gdk.ModifierType.SUPER_MASK, Gtk.AccelFlags.VISIBLE,
+                           self.on_new_group_shortcut, None)
 
-        # Ctrl+数字 切换标签页
+        # Super+数字 切换标签页
         for i in range(1, 10):
-            self.add_tab_shortcut(i)
+            self.add_tab_accel(i, accel_group)
 
-    def add_tab_shortcut(self, num):
+    def add_tab_accel(self, num, accel_group):
         """添加标签切换快捷键"""
-        controller = Gtk.ShortcutController.new()
-        controller.set_scope(Gtk.ShortcutScope.GLOBAL)
-        controller.add_shortcut(
-            Gtk.Shortcut.new(
-                Gtk.Keyval.from_name(str(num)),
-                Gtk.ModifierType.CONTROL_MASK,
-                Gtk.CallbackAction.new(self.on_tab_switch_shortcut),
-                GLib.Variant.new_int32(num)
-            )
-        )
-        self.add_controller(controller)
+        accel_group.connect(Gdk.KEY_0 + num, Gdk.ModifierType.SUPER_MASK, Gtk.AccelFlags.VISIBLE,
+                           self.on_tab_switch_shortcut, GLib.Variant.new_int32(num))
 
-    def on_new_group_shortcut(self, controller, args, data=None):
+    def on_new_group_shortcut(self, accel_group, window, keyval, modifier, data):
         """快捷键新建分组"""
         self.on_new_group_clicked(None)
         return True
 
-    def on_tab_switch_shortcut(self, controller, args, data=None):
+    def on_tab_switch_shortcut(self, accel_group, window, keyval, modifier, data):
         """快捷键切换标签"""
         num = int(data) - 1  # 0-indexed
         if num < self.notebook.get_n_pages():
             self.notebook.set_current_page(num)
         return True
-        
+
+    def on_page_switched(self, notebook, page, page_num):
+        """页面切换时更新"""
+        pass
+
     def load_config(self):
         """加载配置文件"""
         if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, 'r') as f:
                 return json.load(f)
         return {"whitelist": [], "tab_position": "top"}
-    
+
     def save_config(self):
         """保存配置"""
         os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
         with open(CONFIG_FILE, 'w') as f:
             json.dump(self.config, f, indent=2)
-    
+
     def on_window_opened(self, screen, window):
         """窗口打开时检查是否在白名单"""
         window_name = window.get_name()
         wm_class = window.get_class_instance_name() or ""
-        
-        print(f"窗口打开: {window_name} ({wm_class})")
-        
+
+        print("窗口打开: {} ({})".format(window_name, wm_class))
+
         if self.is_whitelisted(window_name, wm_class):
             self.add_window_to_notebook(window)
-    
+
     def on_window_closed(self, screen, window):
         """窗口关闭时移除"""
         window_xid = window.get_xid()
@@ -138,7 +126,7 @@ class GroupyWindow(Gtk.Window):
             if page_num >= 0:
                 self.notebook.remove_page(page_num)
             del self.containers[window_xid]
-    
+
     def is_whitelisted(self, name, wm_class):
         """检查是否在白名单"""
         whitelist = self.config.get("whitelist", [])
@@ -146,7 +134,7 @@ class GroupyWindow(Gtk.Window):
             if item.lower() in name.lower() or item.lower() in wm_class.lower():
                 return True
         return False
-    
+
     def add_window_to_notebook(self, window):
         """将窗口添加到标签页"""
         window_xid = window.get_xid()
@@ -157,37 +145,36 @@ class GroupyWindow(Gtk.Window):
         wm_class = window.get_class_instance_name() or ""
 
         # 创建容器
-        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        label_text = f"{window_name}"
+        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        label_text = "{}".format(window_name)
 
         # 检查是否支持 XEmbed
         supports_xembed = window.is_skip_pager() or window.is_skip_tasklist()
 
         if supports_xembed:
             try:
-                from gi.repository import GdkX11
                 display = Gdk.Display.get_default()
                 if display:
                     socket = Gtk.Socket()
-                    container.append(socket)
+                    container.pack_start(socket, True, True, 0)
 
                     # 延迟嵌入，确保 XID 有效
                     GLib.timeout_add(100, self.embed_window, socket, window_xid, container, label_text)
-                    label_text = f"📎 {window_name}"
+                    label_text = "📎 {}".format(window_name)
             except Exception as e:
-                print(f"XEmbed 初始化失败: {e}")
+                print("XEmbed 初始化失败: {}".format(e))
 
         # 添加标签页
         label = Gtk.Label(label=label_text)
-        tab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        tab_box.append(label)
+        tab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        tab_box.pack_start(label, False, False, 0)
 
         # 关闭按钮
-        close_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
-        close_btn.set_valign(Gtk.Align.CENTER)
+        close_btn = Gtk.Button()
+        close_btn.set_image(Gtk.Image.new_from_icon_name("window-close-symbolic", Gtk.IconSize.MENU))
         close_btn.set_relief(Gtk.Relief.NONE)
         close_btn.connect("clicked", self.on_close_tab, window, container)
-        tab_box.append(close_btn)
+        tab_box.pack_start(close_btn, False, False, 0)
 
         page_num = self.notebook.append_page(container, tab_box)
         self.notebook.set_current_page(page_num)
@@ -199,14 +186,15 @@ class GroupyWindow(Gtk.Window):
         """执行窗口嵌入"""
         try:
             socket.add_id(window_xid)
-            print(f"✅ 窗口嵌入成功: {window_xid}")
+            print("✅ 窗口嵌入成功: {}".format(window_xid))
         except Exception as e:
-            print(f"❌ 窗口嵌入失败: {e}")
+            print("❌ 窗口嵌入失败: {}".format(e))
             # 降级方案：显示占位符
-            for child in container:
+            for child in container.get_children():
                 container.remove(child)
-            placeholder = Gtk.Label(label=f"📦 {label_text}")
-            container.append(placeholder)
+            placeholder = Gtk.Label(label="📦 {}".format(label_text))
+            container.pack_start(placeholder, True, True, 0)
+            placeholder.show()
         return False  # 只执行一次
 
     def on_close_tab(self, btn, window, container):
@@ -217,27 +205,28 @@ class GroupyWindow(Gtk.Window):
         window_xid = window.get_xid()
         if window_xid in self.containers:
             del self.containers[window_xid]
-    
+
     def check_windows(self):
         """定时检查现有窗口"""
         windows = self.screen.get_windows()
         for window in windows:
             if window.get_window_type() == Wnck.WindowType.NORMAL:
-                if self.is_whitelisted(window.get_name(), 
+                if self.is_whitelisted(window.get_name(),
                                        window.get_class_instance_name() or ""):
                     self.add_window_to_notebook(window)
         return True
 
     def on_new_group_clicked(self, widget):
         """新建分组"""
-        dialog = Gtk.Dialog(title="新建分组", transient_for=self)
+        dialog = Gtk.Dialog(title="新建分组", parent=self, modal=True)
         dialog.set_default_size(300, 100)
 
+        box = dialog.get_content_area()
         entry = Gtk.Entry()
         entry.set_placeholder_text("分组名称")
-        dialog.get_content_area().append(entry)
+        box.pack_start(entry, False, False, 0)
 
-        def create_group(response):
+        def create_group(button, response):
             if response == Gtk.ResponseType.OK:
                 group_name = entry.get_text().strip()
                 if group_name:
@@ -247,12 +236,12 @@ class GroupyWindow(Gtk.Window):
         dialog.add_button("创建", Gtk.ResponseType.OK)
         dialog.add_button("取消", Gtk.ResponseType.CANCEL)
         dialog.connect("response", create_group)
-        dialog.present()
+        dialog.show_all()
 
     def add_empty_group(self, name):
         """添加空分组"""
-        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        label = Gtk.Label(label=f"📁 {name}")
+        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        label = Gtk.Label(label="📁 {}".format(name))
 
         # 添加标签页
         page_num = self.notebook.append_page(container, label)
@@ -261,42 +250,43 @@ class GroupyWindow(Gtk.Window):
     def on_settings_clicked(self, widget):
         """打开设置对话框"""
         dialog = SettingsDialog(self)
-        dialog.present()
+        dialog.run()
+        dialog.destroy()
 
 
 class SettingsDialog(Gtk.Dialog):
     def __init__(self, parent):
-        super().__init__(title="Groupy 设置", transient_for=parent)
+        Gtk.Dialog.__init__(self, title="Groupy 设置", parent=parent, modal=True)
         self.set_default_size(400, 300)
         self.parent = parent
 
-        self.vbox = self.get_content_area()
+        box = self.get_content_area()
 
         # 白名单输入
         label = Gtk.Label(label="白名单应用 (逗号分隔):")
-        self.vbox.append(label)
+        box.pack_start(label, False, False, 5)
 
         whitelist_text = ", ".join(parent.config.get("whitelist", []))
         self.entry = Gtk.Entry()
         self.entry.set_text(whitelist_text)
-        self.vbox.append(self.entry)
+        box.pack_start(self.entry, False, False, 5)
 
         # 添加按钮
         add_btn = Gtk.Button(label="➕ 添加当前窗口")
         add_btn.connect("clicked", self.add_current_window)
-        self.vbox.append(add_btn)
+        box.pack_start(add_btn, False, False, 5)
 
         # 清空按钮
         clear_btn = Gtk.Button(label="🗑️ 清空白名单")
         clear_btn.connect("clicked", self.clear_whitelist)
-        self.vbox.append(clear_btn)
+        box.pack_start(clear_btn, False, False, 5)
 
         # 保存按钮
         save_btn = Gtk.Button(label="💾 保存")
         save_btn.connect("clicked", self.save_config)
-        self.vbox.append(save_btn)
+        box.pack_start(save_btn, False, False, 5)
 
-        self.show()
+        self.show_all()
 
     def add_current_window(self, widget):
         """添加当前活动窗口到白名单"""
@@ -306,7 +296,7 @@ class SettingsDialog(Gtk.Dialog):
             wm_class = active_window.get_class_instance_name() or ""
             current_text = self.entry.get_text()
             if wm_class and wm_class not in current_text:
-                self.entry.set_text(f"{current_text}, {wm_class}" if current_text else wm_class)
+                self.entry.set_text("{}, {}".format(current_text, wm_class) if current_text else wm_class)
 
     def clear_whitelist(self, widget):
         """清空白名单"""
@@ -320,18 +310,7 @@ class SettingsDialog(Gtk.Dialog):
         self.destroy()
 
 
-class GroupyApp(Gtk.Application):
-    def __init__(self):
-        super().__init__(application_id="com.groupy.app")
-    
-    def do_activate(self):
-        window = GroupyWindow()
-        self.add_window(window)
-        window.present()
-
-
 if __name__ == "__main__":
-    from gi.repository import GLib
-    app = GroupyApp()
-    exit_status = app.run(sys.argv)
-    sys.exit(exit_status)
+    app = Gtk.Application(application_id="com.groupy.app")
+    app.connect("activate", lambda app: GroupyWindow().show_all())
+    app.run(sys.argv)
