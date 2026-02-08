@@ -68,27 +68,30 @@ class GroupyWindow(Gtk.Window):
         accel_group = Gtk.AccelGroup()
         self.add_accel_group(accel_group)
         accel_group.connect(Gdk.KEY_g, Gdk.ModifierType.SUPER_MASK, Gtk.AccelFlags.VISIBLE,
-                           self.on_new_group_shortcut, None)
+                           self.on_new_group_shortcut)
 
-        # Super+数字 切换标签页
+        # Super+数字 切换标签页 - 使用闭包捕获 num
         for i in range(1, 10):
             self.add_tab_accel(i, accel_group)
 
     def add_tab_accel(self, num, accel_group):
-        """添加标签切换快捷键"""
+        """添加标签切换快捷键 - 使用闭包"""
+        callback = self.make_tab_callback(num)
         accel_group.connect(Gdk.KEY_0 + num, Gdk.ModifierType.SUPER_MASK, Gtk.AccelFlags.VISIBLE,
-                           self.on_tab_switch_shortcut, GLib.Variant.new_int32(num))
+                           callback)
 
-    def on_new_group_shortcut(self, accel_group, window, keyval, modifier, data):
+    def make_tab_callback(self, num):
+        """创建闭包回调"""
+        def callback(accel_group, window, keyval, modifier):
+            target_num = num - 1  # 0-indexed
+            if target_num < self.notebook.get_n_pages():
+                self.notebook.set_current_page(target_num)
+            return True
+        return callback
+
+    def on_new_group_shortcut(self, accel_group, window, keyval, modifier):
         """快捷键新建分组"""
         self.on_new_group_clicked(None)
-        return True
-
-    def on_tab_switch_shortcut(self, accel_group, window, keyval, modifier, data):
-        """快捷键切换标签"""
-        num = int(data) - 1  # 0-indexed
-        if num < self.notebook.get_n_pages():
-            self.notebook.set_current_page(num)
         return True
 
     def on_page_switched(self, notebook, page, page_num):
