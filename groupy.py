@@ -4,9 +4,9 @@
 import sys
 import os
 
-# Display 兼容层
+# Display 兼容层 - 确保所有子进程都能拿到 DISPLAY
 def setup_display():
-    """在导入 GTK 前设置好 DISPLAY"""
+    """设置 DISPLAY 并确保所有子进程可用"""
     if os.environ.get('DISPLAY'):
         return True
     
@@ -24,6 +24,21 @@ def setup_display():
 
 setup_display()
 
+# 创建子进程环境 - 确保 DISPLAY 被传递
+def get_subprocess_env():
+    """获取子进程环境变量"""
+    env = os.environ.copy()
+    if 'DISPLAY' not in env:
+        # 最后尝试
+        import glob
+        sockets = glob.glob('/tmp/.X11-unix/X*')
+        for sock in sorted(sockets):
+            if os.path.exists(sock):
+                display_num = os.path.basename(sock)[1:]
+                env['DISPLAY'] = f":{display_num}"
+                break
+    return env
+
 import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, Gdk, GLib
@@ -36,15 +51,21 @@ def check_single_instance():
     """检查是否已有实例运行"""
     import subprocess
     
+    # 检查 lock 文件
     if os.path.exists(LOCK_FILE):
         try:
             with open(LOCK_FILE, 'r') as f:
                 pid = int(f.read().strip())
+            # 检查进程是否存在
             result = subprocess.run(['ps', '-p', str(pid), '-o', 'pid='], 
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True,
+                                  env=get_subprocess_env())
             if pid and result.stdout.strip():
+                # 尝试激活现有窗口
                 try:
-                    subprocess.run(['wmctrl', '-a', APP_NAME], capture_output=True, timeout=1)
+                    subprocess.run(['wmctrl', '-a', APP_NAME], 
+                                 capture_output=True, timeout=1,
+                                 env=get_subprocess_env())
                 except:
                     pass
                 print(f"Groupy 已在运行 (PID: {pid})")
@@ -52,6 +73,7 @@ def check_single_instance():
         except:
             pass
     
+    # 创建 lock 文件
     try:
         with open(LOCK_FILE, 'w') as f:
             f.write(str(os.getpid()))
@@ -66,7 +88,8 @@ def get_window_app_name(wid):
         import subprocess
         result = subprocess.run(
             ['xdotool', 'getwindowclassname', str(wid)],
-            capture_output=True, text=True, timeout=1
+            capture_output=True, text=True, timeout=1,
+            env=get_subprocess_env()
         )
         return result.stdout.strip()
     except:
@@ -79,7 +102,8 @@ def get_all_windows():
         import subprocess
         result = subprocess.run(
             ['wmctrl', '-l'],
-            capture_output=True, text=True, timeout=2
+            capture_output=True, text=True, timeout=2,
+            env=get_subprocess_env()
         )
         for line in result.stdout.strip().split('\n'):
             parts = line.split()
@@ -132,7 +156,16 @@ class GroupyWindow(Gtk.Window):
         self.accel_group = AccelGroup()
         self.add_accel_group(self.accel_group)
         
+        # ESC 退出
+        key, mod = Gtk.accelerator_parse("Escape")
+        self.accel_group.connect(key, mod, True, self.on_escape)
+        
         self.connect("key-press-event", self.on_key_press)
+        
+    def on_escape(self, accel_group, window, keyval, modifier):
+        """ESC 退出"""
+        self.hide()
+        return True
         
     def setup_ui(self):
         """设置 UI"""
@@ -178,7 +211,7 @@ class GroupyWindow(Gtk.Window):
         scrolled.add(self.list_box)
         
         # 提示信息
-        self.status_label = Gtk.Label(label="↑↓ 导航 | Enter 跳转 | Esc 隐藏")
+        self.status_label = Gtk.Label(label="↑↓ 导航 | Enter 跳转 | Esc 隐藏 | Q 退出")
         self.status_label.set_margin_top(5)
         self.status_label.set_margin_bottom(5)
         vbox.pack_end(self.status_label, False, False, 0)
@@ -205,7 +238,12 @@ class GroupyWindow(Gtk.Window):
         
         # 显示所有窗口数
         count = len(windows)
-        self.status_label.set_text(f"📊 {count} 个窗口 | ↑↓ 导航 | Enter 跳转 | Esc 隐藏")
+        self.status_label.set_text(f"📊 {count} 个窗口 | ↑↓ 导航 | Enter 跳转 | Esc 隐藏 | Q 退出")
+        
+        # 如果没有窗口，显示提示
+        if count == 0:
+            no_windows = Gtk.Label(label="⚠️ 未检测到窗口\n请确保 wmctrl 已安装")
+            self.list_box.pack_start(no_windows, True, True, 50)
     
     def create_group(self, app_name, windows):
         """创建分组"""
@@ -265,7 +303,9 @@ class GroupyWindow(Gtk.Window):
         """激活窗口"""
         import subprocess
         try:
-            subprocess.run(['wmctrl', '-i', '-a', wid], capture_output=True, timeout=1)
+            subprocess.run(['wmctrl', '-i', '-a', wid], 
+                         capture_output=True, timeout=1,
+                         env=get_subprocess_env())
             self.hide()
         except Exception as e:
             print(f"激活窗口失败: {e}")
@@ -274,7 +314,9 @@ class GroupyWindow(Gtk.Window):
         """关闭窗口"""
         import subprocess
         try:
-            subprocess.run(['wmctrl', '-i', '-c', wid], capture_output=True, timeout=1)
+            subprocess.run(['wmctrl', '-i', '-c', wid],
+                         capture_output=True, timeout=1,
+                         env=get_subprocess_env())
             self.load_windows()
         except Exception as e:
             print(f"关闭窗口失败: {e}")
@@ -300,9 +342,14 @@ class GroupyWindow(Gtk.Window):
         key = Gdk.keyval_name(event.keyval)
         state = event.state & Gtk.accelerator_get_default_mod_mask()
         
-        # Esc: 隐藏
-        if key == "Escape" or (key == "q" and state == Gdk.ModifierType.MOD1_MASK):
+        # ESC: 隐藏
+        if key == "Escape":
             self.hide()
+            return True
+        
+        # Q: 退出程序
+        if key == "q" or key == "Q":
+            Gtk.main_quit()
             return True
         
         # Enter: 激活选中的第一个窗口
@@ -332,7 +379,9 @@ class GroupyWindow(Gtk.Window):
         """跳转到指定桌面"""
         import subprocess
         try:
-            subprocess.run(['wmctrl', '-s', str(desktop)], capture_output=True, timeout=1)
+            subprocess.run(['wmctrl', '-s', str(desktop)],
+                          capture_output=True, timeout=1,
+                          env=get_subprocess_env())
         except:
             pass
     
@@ -341,13 +390,13 @@ class GroupyWindow(Gtk.Window):
         try:
             os.makedirs(os.path.dirname(LAST_FILE), exist_ok=True)
             with open(LAST_FILE, 'w') as f:
-                f.write("1")  # 简化：只记录是否开机启动
+                f.write("1")
         except:
             pass
     
     def restore_last_selection(self):
         """恢复上次选择"""
-        pass  # 暂时跳过
+        pass
 
 def main():
     """主函数"""
@@ -357,17 +406,8 @@ def main():
     # GTK 初始化检查
     if not Gtk.init_check():
         print("错误: 无法初始化 GTK。请确保在图形环境中运行。")
-        print("提示: 在 RDP 环境中，请确保 DISPLAY 环境变量已设置。")
         print(f"当前 DISPLAY: {os.environ.get('DISPLAY', '未设置')}")
-        print(f"当前 WAYLAND_DISPLAY: {os.environ.get('WAYLAND_DISPLAY', '未设置')}")
-        
-        # 尝试最后一次
-        print("\n尝试自动修复...")
-        setup_display()
-        print(f"重新设置 DISPLAY: {os.environ.get('DISPLAY', '未设置')}")
-        
-        if not Gtk.init_check():
-            sys.exit(1)
+        sys.exit(1)
     
     win = GroupyWindow()
     
@@ -375,15 +415,18 @@ def main():
     win.show_all()
     
     # 尝试居中
-    screen = win.get_screen()
-    monitor = screen.get_primary_monitor()
-    geometry = screen.get_monitor_geometry(monitor)
-    x = geometry.x + (geometry.width - win.get_default_size()[0]) // 2
-    y = geometry.y + (geometry.height - win.get_default_size()[1]) // 2
-    win.move(x, y)
+    try:
+        screen = win.get_screen()
+        monitor = screen.get_primary_monitor()
+        geometry = screen.get_monitor_geometry(monitor)
+        x = geometry.x + (geometry.width - win.get_default_size()[0]) // 2
+        y = geometry.y + (geometry.height - win.get_default_size()[1]) // 2
+        win.move(x, y)
+    except:
+        pass
     
     print(f"✅ {APP_NAME} 已启动")
-    print("快捷键: ↑↓ 导航 | Enter 跳转 | Esc 隐藏 | Super+1 启动")
+    print("快捷键: ↑↓ 导航 | Enter 跳转 | Esc 隐藏 | Q 退出")
     
     Gtk.main()
 
