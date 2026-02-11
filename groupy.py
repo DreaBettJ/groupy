@@ -5,10 +5,43 @@ import sys
 import os
 import gi
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, Gdk
+from gi.repository import Gtk, Gdk, GLib
 
 APP_NAME = "Groupy Lite"
 LAST_FILE = os.path.expanduser("~/.config/groupy/last_selection")
+LOCK_FILE = os.path.expanduser("~/.config/groupy/groupy.lock")
+
+def check_single_instance():
+    """检查是否已有实例运行"""
+    import subprocess
+    
+    # 检查 lock 文件
+    if os.path.exists(LOCK_FILE):
+        try:
+            with open(LOCK_FILE, 'r') as f:
+                pid = int(f.read().strip())
+            # 检查进程是否存在
+            result = subprocess.run(['ps', '-p', str(pid), '-o', 'pid='], 
+                                  capture_output=True, text=True)
+            if pid and result.stdout.strip():
+                # 尝试激活现有窗口
+                try:
+                    subprocess.run(['wmctrl', '-a', APP_NAME], capture_output=True, timeout=1)
+                except:
+                    pass
+                print(f"Groupy 已在运行 (PID: {pid})")
+                return False
+        except:
+            pass
+    
+    # 创建 lock 文件
+    try:
+        with open(LOCK_FILE, 'w') as f:
+            f.write(str(os.getpid()))
+    except:
+        pass
+    
+    return True
 
 def get_window_app_name(wid):
     """获取窗口的应用名称"""
@@ -37,8 +70,7 @@ class GroupyLiteWindow(Gtk.Window):
         self.set_default_size(320, 500)
         self.set_position(Gtk.WindowPosition.CENTER)
         self.set_keep_above(True)
-        self.set_skip_taskbar_hint(True)  # 不显示在任务栏
-        self.stick()  # 始终可见
+        self.set_decorated(False)  # 无边框
         
         self.groups = {}
         self.visible = True
@@ -71,7 +103,7 @@ class GroupyLiteWindow(Gtk.Window):
         sw.add(self.tree)
         vbox.pack_start(sw, True, True, 5)
 
-        self.status_label = Gtk.Label(label="💡 Alt+Q 启动 | Enter/双击 跳转 | Esc 隐藏")
+        self.status_label = Gtk.Label(label="💡 ↑↓ 导航 | Enter 跳转 | Esc 隐藏")
         vbox.pack_start(self.status_label, False, False, 5)
 
         # 快捷键
@@ -80,32 +112,52 @@ class GroupyLiteWindow(Gtk.Window):
         self.show_all()
         self.started = True
         
-        # 确保窗口激活
-        self.present()
-        self.grab_focus()
-        
+        # 获取焦点
+        self.present_with_time(0)
+        GLib.timeout_add(100, self._grab_focus)
         self.load_windows(None)
+
+    def _grab_focus(self):
+        """延迟获取焦点"""
+        self.present()
+        self.search_entry.grab_focus()
+        return False
 
     def setup_accelerators(self):
         """设置快捷键"""
         accel_group = Gtk.AccelGroup()
         self.add_accel_group(accel_group)
         
-        # Alt+1 切换显示
-        accel_group.connect(Gdk.KEY_1, Gdk.ModifierType.MOD1_MASK, Gtk.AccelFlags.VISIBLE,
+        # Super+1 / Alt+Q 切换显示
+        accel_group.connect(Gdk.KEY_1, Gdk.ModifierType.SUPER_MASK, Gtk.AccelFlags.VISIBLE,
+                           self.on_toggle)
+        accel_group.connect(Gdk.KEY_q, Gdk.ModifierType.MOD1_MASK, Gtk.AccelFlags.VISIBLE,
                            self.on_toggle)
         
         # Enter 跳转
-        accel_group.connect(Gdk.KEY_Return, Gdk.ModifierType.MOD1_MASK, Gtk.AccelFlags.VISIBLE,
+        accel_group.connect(Gdk.KEY_Return, 0, Gtk.AccelFlags.VISIBLE,
                            self.on_enter)
+        
+        # 上下键导航
+        accel_group.connect(Gdk.KEY_Down, 0, Gtk.AccelFlags.VISIBLE,
+                           self.on_down)
+        accel_group.connect(Gdk.KEY_Up, 0, Gtk.AccelFlags.VISIBLE,
+                           self.on_up)
         
         # Esc 隐藏
         accel_group.connect(Gdk.KEY_Escape, 0, Gtk.AccelFlags.VISIBLE,
                            self.on_escape)
+        
+        # 备用：直接连接键盘事件（RDP 环境更可靠）
+        self.connect("key-press-event", self.on_key_press)
 
     def on_toggle(self, accel_group, window, keyval, modifier):
-        """Alt+1 切换显示"""
-        self.toggle_visible()
+        """Super+1 切换显示/退出"""
+        if self.visible:
+            self.destroy()
+            Gtk.main_quit()
+        else:
+            self.toggle_visible()
         return True
 
     def on_enter(self, accel_group, window, keyval, modifier):
@@ -117,14 +169,65 @@ class GroupyLiteWindow(Gtk.Window):
                 name = model[treeiter][1]
                 if name:
                     self.goto_window(name)
-                    self.hide()
-                    self.visible = False
+                    self.destroy()
+                    Gtk.main_quit()
         return True
 
     def on_escape(self, accel_group, window, keyval, modifier):
-        """Esc 隐藏"""
-        self.hide()
-        self.visible = False
+        """Esc 退出程序"""
+        self.destroy()
+        Gtk.main_quit()
+        return True
+
+    def on_key_press(self, widget, event):
+        """键盘事件处理（RDP 环境备用）"""
+        if event.keyval == Gdk.KEY_Escape:
+            self.destroy()
+            Gtk.main_quit()
+            return True
+        return False
+
+    def on_down(self, accel_group, window, keyval, modifier):
+        """下键 - 选中下一个"""
+        if not self.visible:
+            return False
+        
+        selection = self.tree.get_selection()
+        model, iter = selection.get_selected()
+        
+        if iter:
+            next_iter = model.iter_next(iter)
+            if next_iter:
+                selection.select_iter(next_iter)
+        else:
+            # 选中第一个
+            def find_first(model, path, iter, data):
+                name = model[iter][1]
+                if name:
+                    selection.select_iter(iter)
+                    return True
+                return False
+            model.foreach(find_first, None)
+        
+        return True
+
+    def on_up(self, accel_group, window, keyval, modifier):
+        """上键 - 选中上一个"""
+        if not self.visible:
+            return False
+        
+        selection = self.tree.get_selection()
+        model, iter = selection.get_selected()
+        
+        if iter:
+            path = model.get_path(iter)
+            if path.indices()[0] > 0:
+                prev_path = list(path.indices())
+                prev_path[-1] -= 1
+                prev_iter = model.get_iter_from_string(':'.join(map(str, prev_path)))
+                if prev_iter:
+                    selection.select_iter(prev_iter)
+        
         return True
 
     def toggle_visible(self):
@@ -133,8 +236,9 @@ class GroupyLiteWindow(Gtk.Window):
             self.hide()
             self.visible = False
         else:
-            self.present_and_focus()
+            self.present()
             self.visible = True
+            GLib.timeout_add(100, self._grab_focus)
             self.load_windows(None)
 
     def load_windows(self, widget):
@@ -236,29 +340,42 @@ class GroupyLiteWindow(Gtk.Window):
 
     def select_last(self):
         """选中上次选择的窗口"""
-        if not os.path.exists(LAST_FILE):
-            return
+        if os.path.exists(LAST_FILE):
+            try:
+                with open(LAST_FILE, "r") as f:
+                    last_name = f.read().strip()
+                if last_name:
+                    # 查找并选中上次选择的窗口
+                    found = [False]
+                    def find_and_select(model, path, iter, data):
+                        name = model[iter][1]
+                        if name == last_name:
+                            self.tree.get_selection().select_iter(iter)
+                            self.tree.scroll_to_cell(path, None, True, 0, 0)
+                            found[0] = True
+                            return True
+                        return False
+                    
+                    self.store.foreach(find_and_select, None)
+                    if found[0]:
+                        return
+            except:
+                pass
         
-        try:
-            with open(LAST_FILE, "r") as f:
-                last_name = f.read().strip()
-            if not last_name:
-                return
-            
-            # 在树中查找并选中
-            def find_and_select(model, path, iter, data):
-                name = model[iter][1]
-                if name == last_name:
-                    self.tree.get_selection().select_iter(iter)
-                    # 滚动到该行
-                    self.tree.scroll_to_cell(path, None, True, 0, 0)
-                    return True
-                return False
-            
-            self.store.foreach(find_and_select, None)
-            
-        except:
-            pass
+        # 没有上次选择，选中第一个可跳转的窗口
+        self.select_first()
+
+    def select_first(self):
+        """选中第一个可跳转的窗口"""
+        def find_first(model, path, iter, data):
+            name = model[iter][1]
+            if name:  # 不是分组
+                self.tree.get_selection().select_iter(iter)
+                self.tree.scroll_to_cell(path, None, True, 0, 0)
+                return True
+            return False
+        
+        self.store.foreach(find_first, None)
 
     def on_search(self, widget):
         """实时搜索"""
@@ -305,10 +422,26 @@ class GroupyLiteWindow(Gtk.Window):
 
 if __name__ == "__main__":
     try:
+        # 单例检查
+        if not check_single_instance():
+            sys.exit(0)
+        
         print("启动 Groupy Lite...")
-        print("快捷键: Alt+Q 启动/显示 | Enter/双击 跳转 | Esc 隐藏")
+        print("快捷键: ↑↓ 导航 | Enter 跳转 | Esc 隐藏 | Super+1 启动")
         print("记住上次选择，开机自动选中")
+        
         win = GroupyLiteWindow()
+        
+        def cleanup():
+            """清理"""
+            try:
+                os.remove(LOCK_FILE)
+            except:
+                pass
+        
+        import atexit
+        atexit.register(cleanup)
+        
         Gtk.main()
         print("退出")
     except Exception as e:
