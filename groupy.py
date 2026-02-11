@@ -7,6 +7,36 @@ import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, Gdk, GLib
 
+def install_desktop_shortcut():
+    """创建桌面和应用菜单快捷方式"""
+    import os
+    
+    desktop_file = os.path.expanduser("~/.local/share/applications/groupy.desktop")
+    
+    # 检查是否已安装
+    if os.path.exists(desktop_file):
+        return
+    
+    content = """[Desktop Entry]
+Name=Groupy
+Comment=窗口标签化管理工具
+Exec=bash -c "source /home/lijiang/code/groupy/run_groupy.sh"
+Icon=utilities-terminal
+Terminal=false
+Type=Application
+Categories=Utility;
+StartupNotify=true
+"""
+    
+    try:
+        os.makedirs(os.path.dirname(desktop_file), exist_ok=True)
+        with open(desktop_file, 'w') as f:
+            f.write(content)
+        print(f"已安装应用菜单: {desktop_file}")
+    except Exception as e:
+        print(f"无法创建快捷方式: {e}")
+
+
 APP_NAME = "Groupy Lite"
 LAST_FILE = os.path.expanduser("~/.config/groupy/last_selection")
 LOCK_FILE = os.path.expanduser("~/.config/groupy/groupy.lock")
@@ -452,37 +482,3 @@ if __name__ == "__main__":
 
 # ============================================================
 # 桌面快捷方式安装（首次运行）
-# ============================================================
-
-def install_desktop_shortcut():
-    """创建桌面和应用菜单快捷方式"""
-    import os
-    
-    desktop_file = os.path.expanduser("~/.local/share/applications/groupy.desktop")
-    
-    # 检查是否已安装
-    if os.path.exists(desktop_file):
-        return
-    
-    content = '''[Desktop Entry]
-Name=Groupy
-Comment=窗口标签化管理工具
-Exec=bash -c "source /home/lijiang/code/groupy/run_groupy.sh"
-Icon=utilities-terminal
-Terminal=false
-Type=Application
-Categories=Utility;
-StartupNotify=true
-'''
-    
-    try:
-        os.makedirs(os.path.dirname(desktop_file), exist_ok=True)
-        with open(desktop_file, 'w') as f:
-            f.write(content)
-        print(f"✅ 已安装应用菜单: {desktop_file}")
-    except Exception as e:
-        print(f"⚠️  无法创建快捷方式: {e}")
-
-# 在 main() 中调用
-if __name__ == "__main__":
-    install_desktop_shortcut()
