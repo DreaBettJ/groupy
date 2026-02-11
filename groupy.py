@@ -20,7 +20,7 @@ def install_desktop_shortcut():
     content = """[Desktop Entry]
 Name=Groupy
 Comment=窗口标签化管理工具
-Exec=bash -c "source /home/lijiang/code/groupy/run_groupy.sh"
+Exec=/home/lijiang/code/groupy/run_groupy.sh
 Icon=utilities-terminal
 Terminal=false
 Type=Application
