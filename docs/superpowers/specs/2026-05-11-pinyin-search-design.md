@@ -40,10 +40,12 @@
 
 ### 文件变更
 
+根据用户要求精简项目，主入口 `run_groupy.sh` 启动的是 `groupy.py`，其余变体文件不再需要。
+
 **修改：**
 - `groupy.py`：在 `build_tree()` 搜索逻辑中增加拼音匹配
 
-**删除：**
+**删除（共 10 个冗余文件）：**
 - `main.py`、`groupy_gnome.py`、`groupy_combo.py`、`groupy_group.py`、`groupy_lite.py`、`groupy_simple.py`、`groupy_stable.py`、`test_gui.py`、`config.json`、`README.md`
 
 **依赖变更：**
