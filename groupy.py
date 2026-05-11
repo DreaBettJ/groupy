@@ -3,9 +3,11 @@
 
 import sys
 import os
+import signal
+from pypinyin import lazy_pinyin
 import gi
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, Gdk, GLib
+from gi.repository import Gtk, Gdk, GLib, GLibUnix
 
 def install_desktop_shortcut():
     """创建桌面和应用菜单快捷方式"""
@@ -54,12 +56,12 @@ def check_single_instance():
             result = subprocess.run(['ps', '-p', str(pid), '-o', 'pid='], 
                                   capture_output=True, text=True)
             if pid and result.stdout.strip():
-                # 尝试激活现有窗口
+                # 通知现有实例切换显示
                 try:
-                    subprocess.run(['wmctrl', '-a', APP_NAME], capture_output=True, timeout=1)
+                    os.kill(pid, signal.SIGUSR1)
                 except:
                     pass
-                print(f"Groupy 已在运行 (PID: {pid})")
+                print(f"Groupy 已在运行 (PID: {pid})，已发送唤出信号")
                 return False
         except:
             pass
@@ -93,6 +95,14 @@ def get_window_app_name(wid):
     except:
         pass
     return None
+
+def pinyin_match(text, search):
+    """检查 search 是否匹配 text 的拼音（无声调全拼子串）"""
+    try:
+        pinyin = ''.join(lazy_pinyin(text)).lower()
+        return search in pinyin
+    except:
+        return False
 
 class GroupyLiteWindow(Gtk.Window):
     def __init__(self):
@@ -138,6 +148,9 @@ class GroupyLiteWindow(Gtk.Window):
 
         # 快捷键
         self.setup_accelerators()
+
+        # SIGUSR1 信号处理：外部唤出
+        GLibUnix.signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, self.on_signal_activate, None)
         
         self.show_all()
         self.started = True
@@ -182,16 +195,17 @@ class GroupyLiteWindow(Gtk.Window):
         self.connect("key-press-event", self.on_key_press)
 
     def on_toggle(self, accel_group, window, keyval, modifier):
-        """Super+1 切换显示/退出"""
-        if self.visible:
-            self.destroy()
-            Gtk.main_quit()
-        else:
-            self.toggle_visible()
+        """Super+1 切换显示/隐藏"""
+        self.toggle_visible()
         return True
 
+    def on_signal_activate(self, user_data):
+        """SIGUSR1 信号处理：切换显示"""
+        self.toggle_visible()
+        return GLib.SOURCE_CONTINUE
+
     def on_enter(self, accel_group, window, keyval, modifier):
-        """Alt+Enter 跳转选中"""
+        """Enter 跳转选中并隐藏"""
         if self.visible:
             selection = self.tree.get_selection()
             model, treeiter = selection.get_selected()
@@ -199,21 +213,21 @@ class GroupyLiteWindow(Gtk.Window):
                 name = model[treeiter][1]
                 if name:
                     self.goto_window(name)
-                    self.destroy()
-                    Gtk.main_quit()
+                    self.hide()
+                    self.visible = False
         return True
 
     def on_escape(self, accel_group, window, keyval, modifier):
-        """Esc 退出程序"""
-        self.destroy()
-        Gtk.main_quit()
+        """Esc 隐藏"""
+        self.hide()
+        self.visible = False
         return True
 
     def on_key_press(self, widget, event):
         """键盘事件处理（RDP 环境备用）"""
         if event.keyval == Gdk.KEY_Escape:
-            self.destroy()
-            Gtk.main_quit()
+            self.hide()
+            self.visible = False
             return True
         return False
 
@@ -345,7 +359,8 @@ class GroupyLiteWindow(Gtk.Window):
         
         for app_name, names in sorted(self.groups.items()):
             if search:
-                matched = [n for n in names if search in n.lower() or search in app_name.lower()]
+                matched = [n for n in names if search in n.lower() or search in app_name.lower()
+                           or pinyin_match(n, search) or pinyin_match(app_name, search)]
                 if not matched:
                     continue
                 names = matched
@@ -420,7 +435,7 @@ class GroupyLiteWindow(Gtk.Window):
                 pass  # 准备好跳转
 
     def on_double_click(self, tree, path, column):
-        """双击跳转"""
+        """双击跳转并隐藏"""
         model = tree.get_model()
         treeiter = model.get_iter(path)
         if treeiter:
@@ -431,7 +446,7 @@ class GroupyLiteWindow(Gtk.Window):
                 self.visible = False
 
     def goto_window(self, name):
-        """跳转并退出"""
+        """跳转并隐藏"""
         print(f"跳转: {name}")
         
         # 保存选择
@@ -444,9 +459,7 @@ class GroupyLiteWindow(Gtk.Window):
         try:
             import subprocess
             subprocess.run(['wmctrl', '-a', name], capture_output=True, timeout=1)
-            print("成功，退出")
-            Gtk.main_quit()
-            sys.exit(0)
+            print("成功")
         except Exception as e:
             print(f"失败: {e}")
 
@@ -458,8 +471,8 @@ if __name__ == "__main__":
             sys.exit(0)
         
         print("启动 Groupy Lite...")
-        print("快捷键: ↑↓ 导航 | Enter 跳转 | Esc 隐藏 | Super+1 启动")
-        print("记住上次选择，开机自动选中")
+        print("快捷键: ↑↓ 导航 | Enter 跳转 | Esc 隐藏 | Super+1 切换")
+        print("记住上次选择，常驻后台，开机自动启动")
         
         win = GroupyLiteWindow()
         
