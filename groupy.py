@@ -97,10 +97,12 @@ def get_window_app_name(wid):
     return None
 
 def pinyin_match(text, search):
-    """检查 search 是否匹配 text 的拼音（无声调全拼子串）"""
+    """检查 search 是否匹配 text 的拼音（全拼或首字母子串）"""
     try:
-        pinyin = ''.join(lazy_pinyin(text)).lower()
-        return search in pinyin
+        parts = lazy_pinyin(text)
+        pinyin = ''.join(parts).lower()
+        initials = ''.join(p[0] for p in parts)
+        return search in pinyin or search in initials
     except:
         return False
 
